@@ -1,5 +1,5 @@
 import pyaudio as pa
-
+import numpy as np
 
 FORMAT = pa.paInt16
 CHANNELS = 1
@@ -14,4 +14,8 @@ stream_in = audio_in.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=Tru
 
 while True:
     in_data = stream_in.read(num_frames=CHUNK)
-    stream_out.write(in_data)
+    buffer = np.frombuffer(in_data, dtype = np.int16)
+    buffer.flags.writable = True
+    for i in range(1, len(buffer)):
+        buffer[i] += 0.8 * buffer[i-1] 
+    stream_out.write(buffer.tobytes())
