@@ -127,7 +127,7 @@ private:
 		// From lab sqrt(1 + pow(n,2) * B)
 
 		double B = 0.0008;
-		double max = n * (1 + pow(n,2) * 10*B);
+		double max = sqrt(1 + pow(n,2) * 10*B);
 		double factor = double(velocity) / 127;
 
 		return max * factor;
