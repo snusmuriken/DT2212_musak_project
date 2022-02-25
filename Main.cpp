@@ -50,19 +50,25 @@ public:
 		initialize(channel_count, samplerate);
 	}
 	void handle_midi_message(Message message)
-	{
-		Message data(message);
-
-		
-		if ((data.parts[0] >> 4) == 0x9)
+	{		
+		/*
+		MIDI msg contains:
+		4 bytes:
+		- header: type of msg and channel
+			- type example: node on/off, modulation etc
+		- which key (0-127)
+		- 0 b for note off, 1 b velocity (node on)
+		- 0 b (empty)
+		*/
+		if ((message.parts[0] >> 4) == 0x9)	// Note on
 		{
-			if (data.parts[2] > 0)
-				active_notes[data.parts[1]] = data.parts[2];
+			if (message.parts[2] > 0)	// Velocity > 0
+				active_notes[message.parts[1]] = message.parts[2];
 			else
-				active_notes[data.parts[1]] = -1;
+				active_notes[message.parts[1]] = -1;
 		}
-		else if ((data.parts[0] >> 4) == 0x8)
-			active_notes[data.parts[1]] = -1;
+		else if ((message.parts[0] >> 4) == 0x8)	// Note off
+			active_notes[message.parts[1]] = -1;
 	}
 
 	Int16* samples;
@@ -115,6 +121,17 @@ private:
 
 	}
 
+	double getInharmonicityFactor(int16 n, char velocity) {
+		// without string specifics: n * (1 + pow(n, 2) * J)
+		// -> J decided by velocity, from lab: B = 0.00082 = 2 * J, J = 0.00041
+		// From lab sqrt(1 + pow(n,2) * B)
+
+		double B = 0.0008;
+		double max = n * (1 + pow(n,2) * 10*B);
+		double factor = double(velocity) / 127;
+
+		return max * factor;
+	}
 };
 
 
