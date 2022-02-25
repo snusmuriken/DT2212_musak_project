@@ -1,5 +1,5 @@
-#include <SFML\Audio.hpp>
-#include <Windows.h>
+#include <SFML/Audio.hpp>
+#include <cstring>
 #include <math.h>
 #include "fft.h"
 const double pi = acos(-1);
