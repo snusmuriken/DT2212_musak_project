@@ -91,6 +91,10 @@ private:
 					samples[i] += ampl * sin((2 * pi * f * i) / getSampleRate());
 			}
 		}
+		for (size_t i = 0; i < sample_size; i++)
+		{
+
+		}
 		/*
 		for (int f_i = 0; f_i < freq_count; f_i++)
 		{
