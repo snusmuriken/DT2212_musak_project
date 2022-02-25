@@ -32,17 +32,15 @@ class MidiStream : public SoundStream
 public:
 	MidiStream(unsigned int samplerate = 44100, unsigned int channel_count = 1)
 	{
-		sample_size = 1 << 10;
+		sample_size = 1 << 9;
 		samples = new Int16[sample_size];
-		double base_f = 100;
-		freq_count = 100;
+		freq_count = samplerate;
 
-		freqs = new double[freq_count];
-		phases = new double[freq_count];
-		amps = new double[freq_count];
-		memset(freqs, 0, sizeof(double) * freq_count);
-		memset(phases, 0, sizeof(double) * freq_count);
-		memset(amps, 0, sizeof(double) * freq_count);
+		phases = new float[freq_count];
+		memset(phases, 0, sizeof(float) * freq_count);
+
+		amps = new float[freq_count];
+		memset(amps, 0, sizeof(float) * freq_count);
 
 		active_notes = new char[MIDIKEY_COUNT];
 		memset(active_notes, -1, sizeof(char) * MIDIKEY_COUNT);
@@ -50,52 +48,75 @@ public:
 		initialize(channel_count, samplerate);
 	}
 	void handle_midi_message(Message message)
-	{		
-		/*
-		MIDI msg contains:
-		4 bytes:
-		- header: type of msg and channel
-			- type example: node on/off, modulation etc
-		- which key (0-127)
-		- 0 b for note off, 1 b velocity (node on)
-		- 0 b (empty)
-		*/
-		if ((message.parts[0] >> 4) == 0x9)	// Note on
+	{
+		if ((message.parts[0] >> 4) == 0x9)
 		{
-			if (message.parts[2] > 0)	// Velocity > 0
+			if (message.parts[2] > 0)
 				active_notes[message.parts[1]] = message.parts[2];
 			else
 				active_notes[message.parts[1]] = -1;
 		}
-		else if ((message.parts[0] >> 4) == 0x8)	// Note off
+		else if ((message.parts[0] >> 4) == 0x8)
 			active_notes[message.parts[1]] = -1;
 	}
 
 	Int16* samples;
 	Int64 sample_size;
 private:
-	
 	unsigned int freq_count;
-	double* freqs;
-	double* phases;
-	double* amps;
+	float* amps;
+	float* phases;
 
 
 	char* active_notes; //index is the note, value is the velocity
 
+	double getInharmonicityFactor(Int16 n, char velocity) {
+		// without string specifics: n * (1 + pow(n, 2) * J)
+		// -> J decided by velocity, from lab: B = 0.00082 = 2 * J, J = 0.00041
+		// From lab sqrt(1 + pow(n,2) * B)
+
+		double B = 0.0008;
+		double max = sqrt(1 + pow(n, 2) * 10 * B);
+		double factor = double(velocity) / 127;
+
+		return max * factor;
+	}
+
 	bool onGetData(Chunk& data)
 	{
-		Int16 last_ampl = samples[sample_size - 1];
+		unsigned int overtones = 30;
 		memset(samples, 0, sizeof(Int16) * sample_size);
-		for (int i = 0; i < MIDIKEY_COUNT; i++)
+		memset(amps, 0, sizeof(float) * freq_count);
+
+		for (int k = 0; k < MIDIKEY_COUNT; k++)
 		{
-			if (active_notes[i] != -1)
+			if (active_notes[k] != -1)
 			{
-				double f = pow(2, (i + 36.3763) / 12);
-				double ampl = (active_notes[i] * (1 << 13)) / 127;
-				for (size_t i = 0; i < sample_size; i++)
-					samples[i] += ampl * sin((2 * pi * f * i) / getSampleRate());
+				double f = pow(2, (k + 36.3763) / 12);
+				double ampl = active_notes[k] * ((1 << 13) / 127);
+				amps[int(f)] += ampl;
+				for (int l = 1; l < overtones; l++)
+					amps[int((int(f) * (l + 1)) * getInharmonicityFactor(l + 1, active_notes[k]))] += ampl / (l + 1);
+				
+
 			}
+		}
+		for (unsigned int f = 0; f < freq_count; f++)
+		{
+			if (abs(amps[f]) > 0.1)
+			{
+				double freq = f;
+				for (size_t i = 0; i < sample_size; i++)
+				{
+					samples[i] += amps[f] * sin(phases[f] + (freq * i * 2 * pi) / getSampleRate());
+				}
+				phases[f] += (2 * pi * freq * sample_size) / getSampleRate();
+				if (phases[f] > 2 * pi)
+					phases[f] -= (2 * pi) * int(phases[f] / (2 * pi));
+			}
+			else
+				phases[f] = 0;
+
 		}
 	
 		/*
@@ -121,17 +142,6 @@ private:
 
 	}
 
-	double getInharmonicityFactor(int16 n, char velocity) {
-		// without string specifics: n * (1 + pow(n, 2) * J)
-		// -> J decided by velocity, from lab: B = 0.00082 = 2 * J, J = 0.00041
-		// From lab sqrt(1 + pow(n,2) * B)
-
-		double B = 0.0008;
-		double max = sqrt(1 + pow(n,2) * 10*B);
-		double factor = double(velocity) / 127;
-
-		return max * factor;
-	}
 };
 
 
@@ -157,7 +167,7 @@ int main()
 
 	Message base_message;
 	base_message.parts[0] = 144;
-	base_message.parts[2] = 100;
+	base_message.parts[2] = 60;
 	while (window.isOpen())
 	{
 		Event ev;
