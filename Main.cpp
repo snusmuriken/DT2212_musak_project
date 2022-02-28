@@ -1,8 +1,12 @@
 #include <SFML/Audio.hpp>
 #include <SFML/Graphics.hpp>
 #include <math.h>
+#if defined(_WIN64)
 #include <Windows.h>
-#include "fft.h"
+#else
+#include <cstring>
+#include <iostream>
+#endif
 const double pi = acos(-1);
 #define MIDIKEY_COUNT 127
 #pragma comment(lib,"Winmm.lib") 
@@ -24,6 +28,7 @@ union Message
 	Message& operator=(unsigned int in)
 	{
 		word = in;
+		return *this;
 	}
 };
 
