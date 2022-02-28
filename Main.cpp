@@ -24,6 +24,7 @@ union Message
 
 	Content of all parts depend on first part.
 	*/
+
 	unsigned int word;
 	unsigned char parts[4];
 	Message()
