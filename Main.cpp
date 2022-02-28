@@ -8,6 +8,13 @@
 #include <iostream>
 #endif
 
+#include <sys/soundcard.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+
+#define  MIDI_DEVICE  "/dev/snd/midiC1D0"
+
 const double pi = acos(-1);
 #define MIDIKEY_COUNT 127
 #pragma comment(lib,"Winmm.lib") 
@@ -111,7 +118,7 @@ private:
 		switch (control_type)
 		{
 		case 0x1: //Modulation Wheel
-			overtones = (int(control_value) * 60) / 127;
+			overtones = (int(control_value) * 30) / 127;
 			break;
 		}
 	}
@@ -142,7 +149,7 @@ private:
 				amps[int(f)] += ampl;
 				for (int l = 1; l < overtones; l++) {
 					double inharmonicityFactor = getInharmonicityFactor(l + 1, active_notes[k]);
-					amps[int((int(f) * (l + 1)) * inharmonicityFactor)] += ampl / (l + 1);
+					amps[int((int(f) * (l + 1)))] += ampl / (l + 1);
 				}
 
 				
@@ -186,8 +193,24 @@ int main()
 	using namespace std;
 	MidiStream song;
 	song.play();
+	
+	Message inpacket;
+	// first open the sequencer device for reading.
+	int seqfd = open(MIDI_DEVICE, 00);
+	
+	if (seqfd == -1) {
+		printf("Error: cannot open %s\n", MIDI_DEVICE);
+		return 1;
+	} 
 
-
+	// now just wait around for MIDI bytes to arrive and print them to screen.
+	while (1) {
+		read(seqfd, &inpacket, sizeof(inpacket));
+	
+		song.handle_midi_message(inpacket);
+		// print the MIDI byte if this input packet contains one
+		//printf("received MIDI byte: %d\n", inpacket.parts[1]);
+	}
 
 	RenderWindow window(VideoMode(500, 500), "Wave");
 	VertexArray wave;
@@ -199,6 +222,8 @@ int main()
 	Message base_message;
 	base_message.parts[0] = 144;
 	base_message.parts[2] = 60;
+
+	Int16 counter = 0;
 	while (window.isOpen())
 	{
 		Event ev;
@@ -212,16 +237,20 @@ int main()
 			case Event::KeyPressed:
 				if (ev.key.code == Keyboard::Escape)
 				{
-					base_message.parts[0] = (0xb << 4);
-					base_message.parts[1] = 0x1;
-					base_message.parts[2] = 50;
-					printf("Increase\n");
+					base_message.parts[0] = (0xb << 4);	// Type control
+					base_message.parts[1] = 0x1;		// Modulo
+					base_message.parts[2] = counter;			// Value of modulo
+					//printf("Increase\n");
 					
+					sleep(sf::seconds(0.001));
+					if (counter < 127) counter++;
+					else counter = 0;
 				}
 				else
 				{
 					base_message.parts[0] = 144;
 					base_message.parts[1] = ev.key.code + 20;
+					base_message.parts[2] = 100;
 					printf("%d\n", ev.key.code + 20);
 				}
 				song.handle_midi_message(base_message);
