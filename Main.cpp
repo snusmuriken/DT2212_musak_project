@@ -15,6 +15,15 @@ using namespace sf;
 
 union Message
 {
+	/*
+	Message consists of 4 parts:
+	- parts[0] is the type and channel
+	- parts[1] primary value of the type
+	- parts[2] secondary value of the type
+	- parts[3] is not used.
+
+	Content of all parts depend on first part.
+	*/
 	unsigned int word;
 	unsigned char parts[4];
 	Message()
@@ -81,7 +90,7 @@ private:
 		// From lab sqrt(1 + pow(n,2) * B)
 
 		double B = 0.0008;
-		double max = sqrt(1 + pow(n, 2) * 10 * B);
+		double max = sqrt(1 + pow(n, 2) * 2 * B);
 		double factor = double(velocity) / 127;
 
 		return max * factor;
@@ -100,8 +109,11 @@ private:
 				double f = pow(2, (k + 36.3763) / 12);
 				double ampl = active_notes[k] * ((1 << 13) / 127);
 				amps[int(f)] += ampl;
-				for (int l = 1; l < overtones; l++)
-					amps[int((int(f) * (l + 1)) * getInharmonicityFactor(l + 1, active_notes[k]))] += ampl / (l + 1);
+				for (int l = 1; l < overtones; l++) {
+					double inharmonicityFactor = getInharmonicityFactor(l + 1, active_notes[k]);
+					amps[int((int(f) * (l + 1)) * inharmonicityFactor)] += ampl / (l + 1);
+				}
+
 				
 
 			}
@@ -184,6 +196,9 @@ int main()
 				window.close();
 				break;
 			case Event::KeyPressed:
+				if (ev.key.code == Keyboard::Enter) {
+					base_message.parts
+				}
 				base_message.parts[0] = 144;
 				base_message.parts[1] = ev.key.code + 20;
 				printf("%d\n", ev.key.code + 20);
