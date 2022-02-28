@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iostream>
 #endif
+
 const double pi = acos(-1);
 #define MIDIKEY_COUNT 127
 #pragma comment(lib,"Winmm.lib") 
