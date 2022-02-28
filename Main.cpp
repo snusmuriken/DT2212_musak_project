@@ -8,12 +8,22 @@
 #include <iostream>
 #endif
 
+#include <queue>
+#include <vector>
+
+#include "fft.h"
+#include <time.h>
+#include <functional> 
+
+#include "RtMidi.h"
+/*
 #include <sys/soundcard.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
 
 #define  MIDI_DEVICE  "/dev/snd/midiC1D0"
+*/
 
 const double pi = acos(-1);
 #define MIDIKEY_COUNT 127
@@ -144,16 +154,15 @@ private:
 		{
 			if (active_notes[k] != -1)
 			{
-				double f = pow(2, (k + 36.3763) / 12);
-				double ampl = active_notes[k] * ((1 << 13) / 127);
+				double f = pow(2, (k + 36.3763) / 12);	// Get frequency from note
+				double ampl = active_notes[k] * ((1 << 13) / 127);	// (1 << 13) acts as max
 				amps[int(f)] += ampl;
 				for (int l = 1; l < overtones; l++) {
 					double inharmonicityFactor = getInharmonicityFactor(l + 1, active_notes[k]);
-					amps[int((int(f) * (l + 1)))] += ampl / (l + 1);
+					double fN = int(f) * (l + 1) * inharmonicityFactor;
+					if (fN > getSampleRate() / 2) break;
+					else amps[int(fN)] += ampl / (l + 1);
 				}
-
-				
-
 			}
 		}
 		for (unsigned int f = 0; f < freq_count; f++)
@@ -186,32 +195,114 @@ private:
 };
 
 
+void midi_input_main(MidiStream* song_p, std::queue<Message>* input_queue_p)
+{
+	MidiStream& song = *song_p;
+	std::queue<Message>& input_queue = *input_queue_p;
+	while(true)
+	{
+		if(input_queue.size())
+		{
+			song.handle_midi_message(input_queue.front());
+			input_queue.pop();
+		}
+	}
+}
+
+void getSignalFFT(MidiStream& song) {
+	Message base_message;
+	base_message.parts[0] = 144;
+	base_message.parts[1] = 69;
+	base_message.parts[2] = 127;
+	song.handle_midi_message(base_message);
+
+	base_message.parts[0] = (0xb << 4);	// Type control
+	base_message.parts[1] = 0x1;		// Modulo
+	base_message.parts[2] = 127;			// Value of modulo
+	song.handle_midi_message(base_message);
+
+	const unsigned int win_size = 512; 
+
+	RenderWindow window(VideoMode(win_size + 20, win_size), "Wave");
+	VertexArray wave;
+	wave.resize(512);
+	for (int i = 0; i < 512; i++)
+		wave[i].position.x = 2 * i + 10;
+	wave.setPrimitiveType(PrimitiveType::LinesStrip);
+
+	std::complex<double>* compArr = new std::complex<double>[win_size];
+
+	Int16 counter = 0;
+	while (window.isOpen())
+	{
+		Event ev;
+		while (window.pollEvent(ev))
+		{
+			switch (ev.type)
+			{
+			case Event::Closed:
+				window.close();
+				break;
+			default:
+				break;
+			}
+		}
+
+		
+
+		for (int i = 0; i < win_size; i++) {
+			compArr[i] = song.samples[i];
+		}
+
+		fft(compArr, win_size, 1);
+
+		for (int i = 0; i < win_size/2; i++)
+		{
+			wave[i].position.y = -log(abs(compArr[i])) * 10 + win_size/2;
+		}
+		
+		window.clear();
+		window.draw(wave);
+		window.display();
+	}
+	song.stop();
+}
+
 int main()
 {
-
-	//writeSinTest("D:\\Musik\\sin.wav");
 	using namespace std;
+	Message inpacket;
+	queue<Message> input_queue;
 	MidiStream song;
 	song.play();
 	
-	Message inpacket;
-	// first open the sequencer device for reading.
-	int seqfd = open(MIDI_DEVICE, 00);
-	
-	if (seqfd == -1) {
-		printf("Error: cannot open %s\n", MIDI_DEVICE);
-		return 1;
-	} 
+	//sf::Thread midi_event_th(std::bind(&midi_input_main, &song, &input_queue));
+	//midi_event_th.launch();
+	RtMidiIn *midiin = new RtMidiIn();
+	std::cout << "Midi input devices available: " << midiin->getPortCount() << endl;
+  	midiin->openPort(1);
 
-	// now just wait around for MIDI bytes to arrive and print them to screen.
-	while (1) {
-		read(seqfd, &inpacket, sizeof(inpacket));
-	
-		song.handle_midi_message(inpacket);
-		// print the MIDI byte if this input packet contains one
-		//printf("received MIDI byte: %d\n", inpacket.parts[1]);
+  	std::vector<unsigned char> message;
+	int nBytes, i;
+  	double stamp;
+	while(true)
+	{
+		stamp = midiin->getMessage( &message );
+		if(message.size() == 3)
+		{
+			inpacket.parts[0] = message[0];
+			inpacket.parts[1] = message[1];
+			inpacket.parts[2] = message[2];
+			song.handle_midi_message(inpacket);
+		}
+		
+		sleep(sf::milliseconds(10));
 	}
+	getSignalFFT(song);
 
+  	
+
+	/*
 	RenderWindow window(VideoMode(500, 500), "Wave");
 	VertexArray wave;
 	wave.resize(500);
@@ -271,5 +362,6 @@ int main()
 		window.display();
 	}
 	song.stop();
+	*/
 	
 }
