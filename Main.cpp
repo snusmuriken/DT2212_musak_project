@@ -58,13 +58,6 @@ public:
 
 		sample_size = 1 << 9;
 		samples = new Int16[sample_size];
-		freq_count = samplerate;
-
-		phases = new float[freq_count];
-		memset(phases, 0, sizeof(float) * freq_count);
-
-		amps = new float[freq_count];
-		memset(amps, 0, sizeof(float) * freq_count);
 
 		active_notes = new char[MIDIKEY_COUNT];
 		memset(active_notes, -1, sizeof(char) * MIDIKEY_COUNT);
@@ -96,17 +89,14 @@ public:
 	Int16* samples;
 	Int64 sample_size;
 private:
-	unsigned int freq_count;
-	float* amps;
-	float* phases;
 
-	struct AmpAhase
+	struct AmpPhase
 	{
 		float ampl;
 		float phase;
 	};
 	const sf::Uint32 accurary = 10000;
-	std::map<sf::Uint32, AmpAhase> amps_phases; //maps frequencies to amplitudes and phases
+	std::map<sf::Uint32, AmpPhase> amps_phases; //maps frequencies to amplitudes and phases
 
 	unsigned int overtones;
 
@@ -118,7 +108,7 @@ private:
 		switch (control_type)
 		{
 		case 0x1: //Modulation Wheel
-			overtones = (int(control_value) * 30) / 127;
+			overtones = (int(control_value) * 60) / 127;
 			break;
 		}
 	}
@@ -129,7 +119,7 @@ private:
 		// From lab sqrt(1 + pow(n,2) * B)
 
 		double B = 0.0008;
-		double max = sqrt(1 + pow(n, 2) * 2 * B);
+		double max = sqrt(1 + pow(n, 2) * 10 * B);
 		double factor = double(velocity) / 127;
 
 		return max * factor;
@@ -138,7 +128,6 @@ private:
 	bool onGetData(Chunk& data)
 	{
 		memset(samples, 0, sizeof(Int16) * sample_size);
-		memset(amps, 0, sizeof(float) * freq_count);
 
 		for (int k = 0; k < MIDIKEY_COUNT; k++)
 		{
@@ -146,32 +135,49 @@ private:
 			{
 				double f = pow(2, (k + 36.3763) / 12);
 				double ampl = active_notes[k] * ((1 << 13) / 127);
-				amps[int(f)] += ampl;
-				for (int l = 1; l < overtones; l++) {
-					double inharmonicityFactor = getInharmonicityFactor(l + 1, active_notes[k]);
-					amps[int((int(f) * (l + 1)))] += ampl / (l + 1);
+				sf::Uint32 freq_key = Uint32(f * accurary);
+				if (amps_phases.count(freq_key))
+					amps_phases[freq_key].ampl += ampl;
+				else
+					amps_phases[freq_key].ampl = ampl;
+				for (int l = 1; l < overtones; l++)
+				{
+					freq_key = Uint32(f * (l + 1) * accurary);
+					if (amps_phases.count(freq_key))
+						amps_phases[freq_key].ampl += ampl / l;
+					else
+						amps_phases[freq_key].ampl = ampl / l;
 				}
-
+				/*amps[int(f)] += ampl;
+				for (int l = 1; l < overtones; l++)
+				{
+					amps[int((int(f) * (l + 1)))] += ampl / (l + 1)
+				}*/
 				
 
 			}
 		}
-		for (unsigned int f = 0; f < freq_count; f++)
+		std::map<Uint32, AmpPhase>::iterator it = amps_phases.begin();
+		int counter = 0;
+		while(it != amps_phases.end())
 		{
-			if (abs(amps[f]) > 0.1)
+			float f = float(it->first) / accurary;
+			float& ampl = (it->second).ampl;
+			float& phase = (it->second).phase;
+			if (abs(ampl) > 0.1)
 			{
-				double freq = f;
 				for (size_t i = 0; i < sample_size; i++)
-				{
-					samples[i] += amps[f] * sin(phases[f] + (freq * i * 2 * pi) / getSampleRate());
-				}
-				phases[f] += (2 * pi * freq * sample_size) / getSampleRate();
-				if (phases[f] > 2 * pi)
-					phases[f] -= (2 * pi) * int(phases[f] / (2 * pi));
+					samples[i] += ampl * sin(phase + (f * i * 2 * pi) / getSampleRate());
+				
+				phase += (2 * pi * f * sample_size) / getSampleRate();
+				if (phase > 2 * pi)
+					phase -= (2 * pi) * int(phase / (2 * pi));
+				ampl = 0;
+				++it;
 			}
-			else
-				phases[f] = 0;
-
+			else 
+				amps_phases.erase(it++);
+			
 		}
 		data.sampleCount = sample_size;
 		data.samples = samples;
@@ -184,7 +190,6 @@ private:
 	}
 
 };
-
 
 int main()
 {
