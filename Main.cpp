@@ -39,7 +39,6 @@ union Message
 	Message& operator=(unsigned int in)
 	{
 		word = in;
-		return *this;
 	}
 };
 
@@ -48,6 +47,8 @@ class MidiStream : public SoundStream
 public:
 	MidiStream(unsigned int samplerate = 44100, unsigned int channel_count = 1)
 	{
+		overtones = 1;
+
 		sample_size = 1 << 9;
 		samples = new Int16[sample_size];
 		freq_count = samplerate;
@@ -65,15 +66,24 @@ public:
 	}
 	void handle_midi_message(Message message)
 	{
-		if ((message.parts[0] >> 4) == 0x9)
+		switch ((message.parts[0] >> 4))
 		{
+		case 0x9: //Note on
 			if (message.parts[2] > 0)
 				active_notes[message.parts[1]] = message.parts[2];
 			else
 				active_notes[message.parts[1]] = -1;
-		}
-		else if ((message.parts[0] >> 4) == 0x8)
+			break;
+		case 0x8: //Note off
 			active_notes[message.parts[1]] = -1;
+			break;
+		case 0xb: //Control change
+			handle_control_change(message.parts[1], message.parts[2]);
+			break;
+		default:
+			break;
+		}
+
 	}
 
 	Int16* samples;
@@ -83,8 +93,28 @@ private:
 	float* amps;
 	float* phases;
 
+	struct AmpAhase
+	{
+		float ampl;
+		float phase;
+	};
+	const sf::Uint32 accurary = 10000;
+	std::map<sf::Uint32, AmpAhase> amps_phases; //maps frequencies to amplitudes and phases
+
+	unsigned int overtones;
+
 
 	char* active_notes; //index is the note, value is the velocity
+
+	void handle_control_change(char control_type, char control_value)
+	{
+		switch (control_type)
+		{
+		case 0x1: //Modulation Wheel
+			overtones = (int(control_value) * 60) / 127;
+			break;
+		}
+	}
 
 	double getInharmonicityFactor(Int16 n, char velocity) {
 		// without string specifics: n * (1 + pow(n, 2) * J)
@@ -100,7 +130,6 @@ private:
 
 	bool onGetData(Chunk& data)
 	{
-		unsigned int overtones = 30;
 		memset(samples, 0, sizeof(Int16) * sample_size);
 		memset(amps, 0, sizeof(float) * freq_count);
 
@@ -137,20 +166,6 @@ private:
 				phases[f] = 0;
 
 		}
-	
-		/*
-		for (int f_i = 0; f_i < freq_count; f_i++)
-		{
-			if (abs(freqs[f_i]) < 1)
-				break;
-			for (size_t i = 0; i < sample_size; i++)
-			{
-				samples[i] += amps[f_i] * sin(phases[f_i] + (2 * pi * freqs[f_i] * i) / getSampleRate());
-			}
-			phases[f_i] = phases[f_i] + (2 * pi * freqs[f_i] * sample_size) / getSampleRate();
-			if (phases[f_i] > 2 * pi)
-				phases[f_i] -= (2 * pi) * int(phases[f_i] / (2 * pi));
-		}*/
 		data.sampleCount = sample_size;
 		data.samples = samples;
 		return true;
@@ -170,10 +185,7 @@ int main()
 	//writeSinTest("D:\\Musik\\sin.wav");
 	using namespace std;
 	MidiStream song;
-	cout << "created" << endl;
-	cout << "opened" << endl;
 	song.play();
-	cout << "started" << endl;
 
 
 
@@ -198,13 +210,22 @@ int main()
 				window.close();
 				break;
 			case Event::KeyPressed:
-				if (ev.key.code == Keyboard::Enter) {
-					base_message.parts
+				if (ev.key.code == Keyboard::Escape)
+				{
+					base_message.parts[0] = (0xb << 4);
+					base_message.parts[1] = 0x1;
+					base_message.parts[2] = 50;
+					printf("Increase\n");
+					
 				}
-				base_message.parts[0] = 144;
-				base_message.parts[1] = ev.key.code + 20;
-				printf("%d\n", ev.key.code + 20);
+				else
+				{
+					base_message.parts[0] = 144;
+					base_message.parts[1] = ev.key.code + 20;
+					printf("%d\n", ev.key.code + 20);
+				}
 				song.handle_midi_message(base_message);
+				
 				break;
 			case Event::KeyReleased:
 				base_message.parts[0] = 128;
