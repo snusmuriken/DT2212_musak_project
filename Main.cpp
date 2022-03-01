@@ -64,31 +64,36 @@ class MidiStream : public SoundStream
 public:
 	MidiStream(unsigned int samplerate = 44100, unsigned int channel_count = 1)
 	{
-		overtones = 1;
+		//overtones = 1;
+		inharmonicity = 0;
+		sampleSize = 1 << 9;
+		samples = new Int16[sampleSize];
 
-		sample_size = 1 << 9;
-		samples = new Int16[sample_size];
+		activeNotes = new char[MIDIKEY_COUNT];
+		memset(activeNotes, -1, sizeof(char) * MIDIKEY_COUNT);
 
-		active_notes = new char[MIDIKEY_COUNT];
-		memset(active_notes, -1, sizeof(char) * MIDIKEY_COUNT);
+		prevNoteStatus = new char[MIDIKEY_COUNT];
+		memset(prevNoteStatus, -1, sizeof(char) * MIDIKEY_COUNT);
 
 		initialize(channel_count, samplerate);
 	}
-	void handle_midi_message(Message message)
-	{
+	
+	void handleMidiMessage(Message message){
+		/// Read the incoming MIDI message and set active notes 
+		///(to be played) according to its contents.
 		switch ((message.parts[0] >> 4))
 		{
 		case 0x9: //Note on
 			if (message.parts[2] > 0)
-				active_notes[message.parts[1]] = message.parts[2];
+				activeNotes[message.parts[1]] = message.parts[2];
 			else
-				active_notes[message.parts[1]] = -1;
+				activeNotes[message.parts[1]] = -1;
 			break;
 		case 0x8: //Note off
-			active_notes[message.parts[1]] = -1;
+			activeNotes[message.parts[1]] = -1;
 			break;
 		case 0xb: //Control change
-			handle_control_change(message.parts[1], message.parts[2]);
+			handleControlChange(message.parts[1], message.parts[2]);
 			break;
 		default:
 			break;
@@ -97,7 +102,7 @@ public:
 	}
 
 	Int16* samples;
-	Int64 sample_size;
+	Int64 sampleSize;
 private:
 
 	struct AmpPhase
@@ -106,95 +111,115 @@ private:
 		float phase;
 	};
 	const sf::Uint32 accurary = 10000;
-	std::map<sf::Uint32, AmpPhase> amps_phases; //maps frequencies to amplitudes and phases
+	
+	//maps frequencies to amplitudes and phases to avoid getting clicks in playback
+	std::map<sf::Uint32, AmpPhase> ampsPhases; 
 
-	unsigned int overtones;
+	float inharmonicity;
+	//unsigned int overtones;
 
+	char* activeNotes; //index is the note, value is the velocity
+	char* prevNoteStatus; // Keeps track of whether the note was on and off before
 
-	char* active_notes; //index is the note, value is the velocity
-
-	void handle_control_change(char control_type, char control_value)
-	{
+	void handleControlChange(char control_type, char control_value) {
+		/// Handles a change of the modulation wheel, increasing inharmonicity.
 		switch (control_type)
 		{
-		case 0x1: //Modulation Wheel
-			overtones = (int(control_value) * 60) / 127;
+		case 0x1: // Modulation Wheel
+			//overtones = (int(control_value) * 40) / 127;
+			inharmonicity = 0.001 * double(control_value) / 127;
 			break;
 		}
 	}
-
-	double getInharmonicityFactor(Int16 n, char velocity) {
-		// without string specifics: n * (1 + pow(n, 2) * J)
-		// -> J decided by velocity, from lab: B = 0.00082 = 2 * J, J = 0.00041
-		// From lab sqrt(1 + pow(n,2) * B)
-
-		double B = 0.0008;
-		double max = sqrt(1 + pow(n, 2) * 10 * B);
-		double factor = double(velocity) / 127;
-
-		return max * factor;
+	
+	double getAWeight(double f) {
+		/// Weights the ouput amplitude according to frequency.
+		double f_sq = f * f;
+		return (12194 * 12194 *  f_sq * f_sq) / (
+				(f_sq + 20.6 * 20.6) * sqrt((f_sq + 107.7 * 107.7) * (f_sq + 737.9 * 737.9)) * (f_sq + 12194 * 12194));
 	}
 
-	bool onGetData(Chunk& data)
-	{
-		memset(samples, 0, sizeof(Int16) * sample_size);
+	double getInharmonicityFactor(Int16 n, char velocity) {
+		/// Depending on velocity of keypress, create corrseponding inharmonicity factor.
+		/*double inharmony = 1;
+		if (double(velocity) > 127/2){
+			double factor = double(velocity) / 127;
+			double B = factor * 0.001;
+			inharmony = sqrt(1 + pow(n, 2) * 2 * inharmonicity);	// See Askenfelt Strings eq. 25
+		}
 
-		for (int k = 0; k < MIDIKEY_COUNT; k++)
-		{
-			if (active_notes[k] != -1)
-			{
+		return inharmony;*/
+		return sqrt(1 + pow(n, 2) * 2 * inharmonicity);
+	}
+
+	// THIS FUNCTION GENERATES THE SOUND
+	bool onGetData(Chunk& data) {
+		memset(samples, 0, sizeof(Int16) * sampleSize);
+
+		for (int k = 0; k < MIDIKEY_COUNT; k++) {
+			if (activeNotes[k] != -1) {	// If -1 the note off
+				int overtones = activeNotes[k] > 45 ? (activeNotes[k] - 45)/2.5 : 0;
 				double f = pow(2, (k + 36.3763) / 12);
-				double ampl = active_notes[k] * ((1 << 13) / 127);
-				sf::Uint32 freq_key = Uint32(f * accurary);
-				if (amps_phases.count(freq_key))
-					amps_phases[freq_key].ampl += ampl;
-				else
-					amps_phases[freq_key].ampl = ampl;
+				double ampl = activeNotes[k] * ((1 << 13) / 127);
+				
+				double maxAmpl = 1;
 				for (int l = 1; l < overtones; l++)
-				{
-					double inharmonicityFactor = getInharmonicityFactor(l + 1, active_notes[k]);
-					double fN = int(f) * (l + 1) * inharmonicityFactor;
-					if (fN > getSampleRate() / 2) break;
-					else {
-						freq_key = Uint32(f * (l + 1) * accurary);
-						if (amps_phases.count(freq_key))
-							amps_phases[freq_key].ampl += ampl / l;
-						else
-							amps_phases[freq_key].ampl = ampl / l;
-					}
-				}
-				/*amps[int(f)] += ampl;
-				for (int l = 1; l < overtones; l++)
-				{
-					amps[int((int(f) * (l + 1)))] += ampl / (l + 1)
-				}*/
+					maxAmpl += 1/pow(l + 1, 1.5);
 				
 
+				sf::Uint32 freqKey = Uint32(f * accurary);
+				if (ampsPhases.count(freqKey))
+					ampsPhases[freqKey].ampl += ampl / maxAmpl;
+				else
+					ampsPhases[freqKey].ampl = ampl / maxAmpl;
+				for (int l = 1; l < overtones; l++) {
+					double inharmonicityFactor = getInharmonicityFactor(l + 1, activeNotes[k]);
+					double fN = f * inharmonicityFactor * (l + 1);
+					if (fN > getSampleRate() / 2) break;
+					else {
+						freqKey = Uint32(fN * accurary);
+						if (ampsPhases.count(freqKey))
+							ampsPhases[freqKey].ampl += ampl / (pow(l + 1, 1.5) * maxAmpl);
+						else
+							ampsPhases[freqKey].ampl = ampl / (pow(l + 1, 1.5) * maxAmpl);
+					}
+				}
 			}
+			else if (activeNotes[k] == -1 && prevNoteStatus[k] != -1) {
+				
+			}
+			
 		}
-		std::map<Uint32, AmpPhase>::iterator it = amps_phases.begin();
+		std::map<Uint32, AmpPhase>::iterator it = ampsPhases.begin();
+		float maxAmpl = 0;
+		for(; it != ampsPhases.end(); ++it)
+		{
+			if(abs((it->second).ampl) > maxAmpl)
+				maxAmpl = (it->second).ampl;
+		}
+		it = ampsPhases.begin();
 		int counter = 0;
-		while(it != amps_phases.end())
+		while(it != ampsPhases.end())
 		{
 			float f = float(it->first) / accurary;
 			float& ampl = (it->second).ampl;
 			float& phase = (it->second).phase;
 			if (abs(ampl) > 0.1)
 			{
-				for (size_t i = 0; i < sample_size; i++)
-					samples[i] += ampl * sin(phase + (f * i * 2 * pi) / getSampleRate());
+				for (size_t i = 0; i < sampleSize; i++)
+					samples[i] += (ampl* (1 << 12) /maxAmpl ) * sin(phase + (f * i * 2 * pi) / getSampleRate());
 				
-				phase += (2 * pi * f * sample_size) / getSampleRate();
+				phase += (2 * pi * f * sampleSize) / getSampleRate();
 				if (phase > 2 * pi)
 					phase -= (2 * pi) * int(phase / (2 * pi));
 				ampl = 0;
 				++it;
 			}
 			else 
-				amps_phases.erase(it++);
+				ampsPhases.erase(it++);
 			
 		}
-		data.sampleCount = sample_size;
+		data.sampleCount = sampleSize;
 		data.samples = samples;
 		return true;
 
@@ -206,32 +231,8 @@ private:
 
 };
 
-
-void midi_input_main(MidiStream* song_p, std::queue<Message>* input_queue_p)
-{
+void getSignalFFT(MidiStream* song_p) {
 	MidiStream& song = *song_p;
-	std::queue<Message>& input_queue = *input_queue_p;
-	while(true)
-	{
-		if(input_queue.size())
-		{
-			song.handle_midi_message(input_queue.front());
-			input_queue.pop();
-		}
-	}
-}
-
-void getSignalFFT(MidiStream& song) {
-	Message base_message;
-	base_message.parts[0] = 144;
-	base_message.parts[1] = 69;
-	base_message.parts[2] = 127;
-	song.handle_midi_message(base_message);
-
-	base_message.parts[0] = (0xb << 4);	// Type control
-	base_message.parts[1] = 0x1;		// Modulo
-	base_message.parts[2] = 127;			// Value of modulo
-	song.handle_midi_message(base_message);
 
 	const unsigned int win_size = 512; 
 
@@ -280,37 +281,54 @@ void getSignalFFT(MidiStream& song) {
 	song.stop();
 }
 
+/*
+func decay(val) {
+	if (val < thresh) return;
+	else {
+		return
+	}
+}
+*/
+
 int main()
 {
 	using namespace std;
-	Message inpacket;
-	queue<Message> input_queue;
-	MidiStream song;
+	Message inpacket;	// Initialize MIDI message
+	queue<Message> inputQueue;
+	MidiStream song;	// Initialize an object of class MidiStream, defined above
+	
+	// Start playing the stream whose content will be updated 
+	// by handling MIDI messages in onGetData
 	song.play();
 	
-	//sf::Thread midi_event_th(std::bind(&midi_input_main, &song, &input_queue));
-	//midi_event_th.launch();
-	RtMidiIn *midiin = new RtMidiIn();
+	// Create thread that will handle the song
+	sf::Thread midiVisTh(std::bind(&getSignalFFT, &song));
+	midiVisTh.launch();
+	
+	RtMidiIn *midiin = new RtMidiIn();	// Creates the MIDI device
 	std::cout << "Midi input devices available: " << midiin->getPortCount() << endl;
   	midiin->openPort(1);
 
   	std::vector<unsigned char> message;
 	int nBytes, i;
   	double stamp;
+
+	// Start loop that handles incoming MIDI messages  
 	while(true)
 	{
 		stamp = midiin->getMessage( &message );
-		if(message.size() == 3)
+		if(message.size() == 3)		// Only handle standard messages
 		{
 			inpacket.parts[0] = message[0];
 			inpacket.parts[1] = message[1];
 			inpacket.parts[2] = message[2];
-			song.handle_midi_message(inpacket);
+
+			// Go to our own function that handles MIDI messages.
+			song.handleMidiMessage(inpacket);
 		}
 		
 		sleep(sf::milliseconds(10));
 	}
-	getSignalFFT(song);
 
   	
 
